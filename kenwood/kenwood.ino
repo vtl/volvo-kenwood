@@ -17,27 +17,39 @@
  *
  * Kenwood codes were taken from here: http://custombaggerforum.com/forum/showthread.php?551-Road-Glide-Hacks&p=7085&viewfull=1#post7085
  * Thanks, Len Shelton!
+ *
+ * CCM (?) CAN ID 0x02803008
+ * Sends ambient light level
+ * Message is 8 bytes long: 0x8D 0x41 0x90 0xF9 0xFF 0x00 0x40 0x00
+ *                                           ^^
+ *                                           |Instrument cluster backlight 0..F
+ *                                           Ambient light (F - day, !F - not day)
+ *                            
  */
 
 #include <SPI.h>
 #include <mcp_can.h>
 #include <mcp_can_dfs.h>
- 
+
+//#define TEST_MODE
+
 #define SWM_CAN_ID 0x0131726c
+#define CCM_CAN_ID 0x02803008
+
 /* direct button mappings */
 #define SWM_TRK_PREV    (1ULL << (8 * 7 + 0))
 #define SWM_TRK_NEXT    (1ULL << (8 * 7 + 1))
 #define SWM_VOL_DOWN    (1ULL << (8 * 7 + 2))
 #define SWM_VOL_UP      (1ULL << (8 * 7 + 3))
 /* combo mappings for extra functions */
-#define COMBO_DISC_PREV (SWM_TRK_PREV | SWM_VOL_UP)
+#define COMBO_DISC_PREV (SWM_TRK_PREV | SWM_VOL_DOWN)
 #define COMBO_DISC_NEXT (SWM_TRK_NEXT | SWM_VOL_UP)
-#define COMBO_ILLUMI    (SWM_TRK_PREV | SWM_VOL_DOWN)
+//#define COMBO_ILLUMI    (SWM_TRK_PREV | SWM_VOL_UP)
 
 #define SWC_OUTPUT    7
 #define ILLUMI_OUTPUT 6
 
-#define NR_ACTIONS 7
+#define NR_ACTIONS 6
 
 MCP_CAN CAN(10);
 
@@ -78,8 +90,14 @@ void toggle_action_on_press(struct action *a) {
 }
 
 void delay_on_release(struct action *a) {
+  unsigned char len;
+  unsigned char buf[8];
+
   Serial.println("delay");
   delay(1000); // give human some time to release combo button
+  while (CAN.checkReceive() == CAN_MSGAVAIL) {
+    CAN.readMsgBuf(&len, buf);
+  }
 };
 
 void toggle_action_on_release(struct action *a) {
@@ -90,7 +108,7 @@ void toggle_action_on_release(struct action *a) {
 
 struct action actions[NR_ACTIONS] =
   {
-    { COMBO_ILLUMI,    toggle_action_on_press, toggle_action_on_release, "ILLUMI",   { ILLUMI_OUTPUT, false, true } },
+//    { COMBO_ILLUMI,    toggle_action_on_press, toggle_action_on_release, "ILLUMI",   { ILLUMI_OUTPUT, false, true } },
     { COMBO_DISC_PREV, swc_action_on_press,    delay_on_release,         "DSC_PREV", { 0,0,1,0,1,0,0,0,0,0,1,0,1,0,0,0,1,0,1,0,1,0,1,0 } },
     { COMBO_DISC_NEXT, swc_action_on_press,    delay_on_release,         "DSC_NEXT", { 1,0,0,1,0,1,0,0,0,0,0,0,1,0,0,0,1,0,1,0,1,0,1,0 } },
     { SWM_TRK_PREV,    swc_action_on_press,    NULL,                     "TRK_PREV", { 0,1,0,0,1,0,0,0,0,0,1,0,0,1,0,0,1,0,1,0,1,0,1,0 } },
@@ -131,18 +149,21 @@ void setup()
   Serial.begin(9600);
   Serial.println("start");
 
-/* Pins 2..5 are for testing w/o CAN shield */
-  for (i = 2; i <= 5; i++) {
-    pinMode(i, INPUT);
-    digitalWrite(i, HIGH);
-  }
-
   pinMode(SWC_OUTPUT, OUTPUT);
   digitalWrite(SWC_OUTPUT, HIGH);
   pinMode(ILLUMI_OUTPUT, OUTPUT);
   digitalWrite(ILLUMI_OUTPUT, HIGH);
 
   Serial.println("Kenwood SWC inited");
+
+#ifdef TEST_MODE
+/* Pins 2..5 are for testing w/o CAN shield */
+
+  for (i = 2; i <= 5; i++) {
+    pinMode(i, INPUT);
+    digitalWrite(i, HIGH);
+  }
+#else
   Serial.println("CAN BUS Shield initialize...");
 
   for (i = 5; i > 0; i--) {
@@ -156,23 +177,30 @@ void setup()
   if (can_ok) {
     Serial.println("... inited!");
     Serial.println("CAN BUS Shield setting filter");
-    if (CAN.init_Mask(0, 1, 0x01ffffff) != MCP2515_OK)
+    if (CAN.init_Mask(0, 1, 0x03ffffff) != MCP2515_OK)
       Serial.println("init mask 0 failed!");
-    if (CAN.init_Mask(1, 1, 0x01ffffff) != MCP2515_OK)
+    if (CAN.init_Mask(1, 1, 0x03ffffff) != MCP2515_OK)
       Serial.println("init mask 1 failed!");
     if (CAN.init_Filt(0, 1, SWM_CAN_ID) != MCP2515_OK)
       Serial.println("init filter 0 failed!");
-    Serial.println("All set!");
+    if (CAN.init_Filt(1, 1, CCM_CAN_ID) != MCP2515_OK)
+      Serial.println("init filter 0 failed!");
   } else {
-    Serial.println("... failed!");    
+    Serial.println("... failed!");
+    return;
   }
+#endif
+  Serial.println("All set!");
 }
 
 void loop()
 {
+#ifdef TEST_MODE
   check_pins();
+#else
   if (can_ok)
     check_canbus();
+#endif
 }
 
 void check_pins()
@@ -194,8 +222,15 @@ void check_canbus()
   if(CAN.checkReceive() == CAN_MSGAVAIL) {
     memset(buf, 0, sizeof(buf));
     CAN.readMsgBuf(&len, buf);
-    if (CAN.getCanId() == SWM_CAN_ID) {
-      do_actions(buf);
+    switch (CAN.getCanId()) {
+      case SWM_CAN_ID:
+        do_actions(buf);
+        break;
+      case CCM_CAN_ID:
+        digitalWrite(ILLUMI_OUTPUT, ((buf[3] & 0xf0) == 0xf0) ? HIGH : LOW);
+        break;
+      default:
+        break;
     }  
   } 
 }   
