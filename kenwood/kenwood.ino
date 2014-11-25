@@ -48,6 +48,7 @@
 
 #define SWC_OUTPUT    7
 #define ILLUMI_OUTPUT 6
+#define CAN_RESET     5
 
 #define NR_ACTIONS 6
 
@@ -142,6 +143,13 @@ void send_bit(boolean bit)
 
 boolean can_ok = false;
 
+void can_reset()
+{
+  digitalWrite(CAN_RESET, LOW);
+  delay(100);
+  digitalWrite(CAN_RESET, HIGH);
+}
+
 void setup()
 {
   int i;
@@ -149,6 +157,8 @@ void setup()
   Serial.begin(9600);
   Serial.println("start");
 
+  pinMode(CAN_RESET, OUTPUT);
+  digitalWrite(CAN_RESET, HIGH);
   pinMode(SWC_OUTPUT, OUTPUT);
   digitalWrite(SWC_OUTPUT, HIGH);
   pinMode(ILLUMI_OUTPUT, OUTPUT);
@@ -157,23 +167,27 @@ void setup()
   Serial.println("Kenwood SWC inited");
 
 #ifdef TEST_MODE
-/* Pins 2..5 are for testing w/o CAN shield */
+/* Pins 1..4 are for testing w/o CAN shield */
 
-  for (i = 2; i <= 5; i++) {
+  for (i = 1; i <= 4; i++) {
     pinMode(i, INPUT);
     digitalWrite(i, HIGH);
   }
 #else
   Serial.println("CAN BUS Shield initialize...");
 
-  for (i = 5; i > 0; i--) {
-    if (CAN.begin(CAN_125KBPS) == CAN_OK) {
-      can_ok = true;
-      break;
+  for (i = 2; i > 0; i--) {
+    can_reset();
+    for (int j = 4; 4 > 0; j--) {
+      if (CAN.begin(CAN_125KBPS) == CAN_OK) {
+        can_ok = true;
+        goto done;
+      }
+      Serial.print(".");
+      delay(250);
     }
-    Serial.print(".");
-    delay(1000);
   }
+done:
   if (can_ok) {
     Serial.println("... inited!");
     Serial.println("CAN BUS Shield setting filter");
@@ -207,10 +221,10 @@ void check_pins()
 {
   unsigned char buf[8] = {0x00, 0x0c, 0x28, 0x52, 0x80, 0x00, 0x00, 0x3f};
 
-  buf[7] ^= ((!digitalRead(2)) << 0);
-  buf[7] ^= ((!digitalRead(3)) << 1);
-  buf[7] ^= ((!digitalRead(4)) << 2);
-  buf[7] ^= ((!digitalRead(5)) << 3);
+  buf[7] ^= ((!digitalRead(1)) << 0);
+  buf[7] ^= ((!digitalRead(2)) << 1);
+  buf[7] ^= ((!digitalRead(3)) << 2);
+  buf[7] ^= ((!digitalRead(4)) << 3);
   do_actions(buf);
 }
 
