@@ -122,6 +122,7 @@ struct action *last_action = NULL;
 
 void send(boolean *command)
 {
+  pinMode(SWC_OUTPUT, OUTPUT);
   digitalWrite(SWC_OUTPUT, LOW);
   delay(10);
   digitalWrite(SWC_OUTPUT, HIGH);
@@ -150,10 +151,17 @@ void can_reset()
   digitalWrite(CAN_RESET, HIGH);
 }
 
+long wd;
+
+void set_wd()
+{
+  wd = 500000;
+}
+
 void setup()
 {
   int i;
-  
+
   Serial.begin(9600);
   Serial.println("start");
 
@@ -204,11 +212,14 @@ done:
     return;
   }
 #endif
+  set_wd();
   Serial.println("All set!");
 }
 
 void loop()
 {
+  if (!wd--)
+    setup();
 #ifdef TEST_MODE
   check_pins();
 #else
@@ -234,6 +245,7 @@ void check_canbus()
   unsigned char buf[8];
 
   if(CAN.checkReceive() == CAN_MSGAVAIL) {
+    set_wd();
     memset(buf, 0, sizeof(buf));
     CAN.readMsgBuf(&len, buf);
     switch (CAN.getCanId()) {
@@ -241,6 +253,7 @@ void check_canbus()
         do_actions(buf);
         break;
       case CCM_CAN_ID:
+        pinMode(ILLUMI_OUTPUT, OUTPUT);
         digitalWrite(ILLUMI_OUTPUT, ((buf[3] & 0xf0) == 0xf0) ? HIGH : LOW);
         break;
       default:
