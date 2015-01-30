@@ -46,9 +46,10 @@
 #define COMBO_DISC_NEXT (SWM_TRK_NEXT | SWM_VOL_UP)
 //#define COMBO_ILLUMI    (SWM_TRK_PREV | SWM_VOL_UP)
 
-#define SWC_OUTPUT    7
-#define ILLUMI_OUTPUT 6
-#define CAN_RESET     5
+#define SWC_OUTPUT    7  // Steering remote control wire
+#define ILLUMI_OUTPUT 6  // Dimmer control wire (through 5->12v transistor amplifier)
+#define CAN_RESET     5  // MCP2515 pin 17 (-Reset)
+#define WD_OUTPUT     4  // MAX823/MAX824 pin 4 (WDI)
 
 #define NR_ACTIONS 6
 
@@ -153,15 +154,24 @@ void can_reset()
 
 long wd;
 
-void set_wd()
+void touch_sw_wd()
 {
   wd = 500000;
+}
+
+void touch_hw_wd()
+{
+  static bool state = true;
+  pinMode(WD_OUTPUT, OUTPUT);
+  digitalWrite(WD_OUTPUT, state);
+  state = !state;
 }
 
 void setup()
 {
   int i;
 
+  touch_hw_wd();
   Serial.begin(9600);
   Serial.println("start");
 
@@ -187,6 +197,7 @@ void setup()
   for (i = 2; i > 0; i--) {
     can_reset();
     for (int j = 4; 4 > 0; j--) {
+      touch_hw_wd();
       if (CAN.begin(CAN_125KBPS) == CAN_OK) {
         can_ok = true;
         goto done;
@@ -212,7 +223,8 @@ done:
     return;
   }
 #endif
-  set_wd();
+  touch_sw_wd();
+  touch_hw_wd();
   Serial.println("All set!");
 }
 
@@ -220,6 +232,7 @@ void loop()
 {
   if (!wd--)
     setup();
+  touch_hw_wd();
 #ifdef TEST_MODE
   check_pins();
 #else
@@ -245,7 +258,7 @@ void check_canbus()
   unsigned char buf[8];
 
   if(CAN.checkReceive() == CAN_MSGAVAIL) {
-    set_wd();
+    touch_sw_wd();
     memset(buf, 0, sizeof(buf));
     CAN.readMsgBuf(&len, buf);
     switch (CAN.getCanId()) {
