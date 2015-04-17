@@ -45,13 +45,14 @@
 #define COMBO_DISC_PREV (SWM_TRK_PREV | SWM_VOL_DOWN)
 #define COMBO_DISC_NEXT (SWM_TRK_NEXT | SWM_VOL_UP)
 //#define COMBO_ILLUMI    (SWM_TRK_PREV | SWM_VOL_UP)
+#define COMBO_REBOOT    (SWM_TRK_PREV | SWM_VOL_UP)
 
 #define SWC_OUTPUT    7  // Steering remote control wire
 #define ILLUMI_OUTPUT 6  // Dimmer control wire (through 5->12v transistor amplifier)
 #define CAN_RESET     5  // MCP2515 pin 17 (-Reset)
 #define WD_OUTPUT     4  // MAX823/MAX824 pin 4 (WDI)
 
-#define NR_ACTIONS 6
+#define NR_ACTIONS 7
 
 MCP_CAN CAN(10);
 
@@ -69,19 +70,25 @@ struct swc_action {
   boolean kenwood_cmd[24];
 };
 
-void swc_action_on_press(struct action *a) {
-  struct swc_action *s = (struct swc_action *)a->opaque;
-  Serial.println(a->msg);
-  send(s->kenwood_cmd);
-}
-
 struct toggle_action {
   unsigned char pin;
   boolean last_state;
   boolean pin_state;
 };
 
-void toggle_action_on_press(struct action *a) {
+struct funcall_action {
+  unsigned char idx;
+};
+
+void swc_action_on_press(struct action *a)
+{
+  struct swc_action *s = (struct swc_action *)a->opaque;
+  Serial.println(a->msg);
+  send(s->kenwood_cmd);
+}
+
+void toggle_action_on_press(struct action *a)
+{
   struct toggle_action *t = (struct toggle_action *)a->opaque;
   if (t->last_state == false) {
     t->last_state = true;
@@ -91,7 +98,8 @@ void toggle_action_on_press(struct action *a) {
   }
 }
 
-void delay_on_release(struct action *a) {
+void delay_on_release(struct action *a)
+{
   unsigned char len;
   unsigned char buf[8];
 
@@ -100,17 +108,40 @@ void delay_on_release(struct action *a) {
   while (CAN.checkReceive() == CAN_MSGAVAIL) {
     CAN.readMsgBuf(&len, buf);
   }
-};
+}
 
-void toggle_action_on_release(struct action *a) {
+void toggle_action_on_release(struct action *a)
+{
   struct toggle_action *t = (struct toggle_action *)a->opaque;
   t->last_state = false;
   delay_on_release(a);
 }
 
+void funcall_action_on_press(struct action *a)
+{
+  struct funcall_action *f = (struct funcall_action *)a->opaque;
+  switch(f->idx) {
+    case 1:
+      stop_updating_wd(a);
+      break;
+    default:
+      break;
+  }
+}
+
+boolean update_hw_wd = true;
+boolean update_sw_wd = true;
+
+void stop_updating_wd(struct action *a)
+{
+  update_hw_wd = false;
+  update_sw_wd = false;
+}
+
 struct action actions[NR_ACTIONS] =
   {
 //    { COMBO_ILLUMI,    toggle_action_on_press, toggle_action_on_release, "ILLUMI",   { ILLUMI_OUTPUT, false, true } },
+    { COMBO_REBOOT,    funcall_action_on_press,NULL,                     "REBOOT",   { 1 } },
     { COMBO_DISC_PREV, swc_action_on_press,    delay_on_release,         "DSC_PREV", { 0,0,1,0,1,0,0,0,0,0,1,0,1,0,0,0,1,0,1,0,1,0,1,0 } },
     { COMBO_DISC_NEXT, swc_action_on_press,    delay_on_release,         "DSC_NEXT", { 1,0,0,1,0,1,0,0,0,0,0,0,1,0,0,0,1,0,1,0,1,0,1,0 } },
     { SWM_TRK_PREV,    swc_action_on_press,    NULL,                     "TRK_PREV", { 0,1,0,0,1,0,0,0,0,0,1,0,0,1,0,0,1,0,1,0,1,0,1,0 } },
@@ -156,14 +187,17 @@ long wd;
 
 void touch_sw_wd()
 {
-  wd = 500000;
+  if (update_sw_wd)
+    wd = 500000;
 }
 
 void touch_hw_wd()
 {
   static bool state = true;
-  pinMode(WD_OUTPUT, OUTPUT);
-  digitalWrite(WD_OUTPUT, state);
+  if (update_hw_wd) {
+    pinMode(WD_OUTPUT, OUTPUT);
+    digitalWrite(WD_OUTPUT, state);
+  }
   state = !state;
 }
 
@@ -171,6 +205,8 @@ void setup()
 {
   int i;
 
+  update_sw_wd = true;
+  update_hw_wd = true;
   touch_hw_wd();
   Serial.begin(9600);
   Serial.println("start");
