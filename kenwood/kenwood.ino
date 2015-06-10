@@ -178,6 +178,7 @@ boolean can_ok = false;
 
 void can_reset()
 {
+  pinMode(CAN_RESET, OUTPUT);
   digitalWrite(CAN_RESET, LOW);
   delay(100);
   digitalWrite(CAN_RESET, HIGH);
@@ -211,8 +212,6 @@ void setup()
   Serial.begin(9600);
   Serial.println("start");
 
-  pinMode(CAN_RESET, OUTPUT);
-  digitalWrite(CAN_RESET, HIGH);
   pinMode(SWC_OUTPUT, OUTPUT);
   digitalWrite(SWC_OUTPUT, HIGH);
   pinMode(ILLUMI_OUTPUT, OUTPUT);
@@ -294,14 +293,15 @@ void check_canbus()
   unsigned char buf[8];
 
   if(CAN.checkReceive() == CAN_MSGAVAIL) {
-    touch_sw_wd();
     memset(buf, 0, sizeof(buf));
     CAN.readMsgBuf(&len, buf);
     switch (CAN.getCanId()) {
       case SWM_CAN_ID:
+        touch_sw_wd();
         do_actions(buf);
         break;
       case CCM_CAN_ID:
+        touch_sw_wd();
         pinMode(ILLUMI_OUTPUT, OUTPUT);
         digitalWrite(ILLUMI_OUTPUT, ((buf[3] & 0xf0) == 0xf0) ? HIGH : LOW);
         break;
