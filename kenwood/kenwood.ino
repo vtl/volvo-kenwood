@@ -31,10 +31,10 @@
 #include <mcp_can.h>
 #include <mcp_can_dfs.h>
 
-//#define TEST_MODE
-
 #define SWM_CAN_ID 0x0131726c
 #define CCM_CAN_ID 0x02803008
+
+#define CAN_MASK (SWM_CAN_ID | CCM_CAN_ID)
 
 /* direct button mappings */
 #define SWM_TRK_PREV    (1ULL << (8 * 7 + 0))
@@ -122,20 +122,11 @@ void funcall_action_on_press(struct action *a)
   struct funcall_action *f = (struct funcall_action *)a->opaque;
   switch(f->idx) {
     case 1:
-      stop_updating_wd(a);
+      delay(3000); // hw watchdog kills us
       break;
     default:
       break;
   }
-}
-
-boolean update_hw_wd = true;
-boolean update_sw_wd = true;
-
-void stop_updating_wd(struct action *a)
-{
-  update_hw_wd = false;
-  update_sw_wd = false;
 }
 
 struct action actions[NR_ACTIONS] =
@@ -154,6 +145,7 @@ struct action *last_action = NULL;
 
 void send(boolean *command)
 {
+  pinMode(SWC_OUTPUT, INPUT);
   pinMode(SWC_OUTPUT, OUTPUT);
   digitalWrite(SWC_OUTPUT, LOW);
   delay(10);
@@ -182,33 +174,65 @@ void can_reset()
   digitalWrite(CAN_RESET, LOW);
   delay(100);
   digitalWrite(CAN_RESET, HIGH);
+  delay(100);
 }
 
-long wd;
-
-void touch_sw_wd()
-{
-  if (update_sw_wd)
-    wd = 500000;
-}
-
-void touch_hw_wd()
+void touch_watchdog()
 {
   static bool state = true;
-  if (update_hw_wd) {
-    pinMode(WD_OUTPUT, OUTPUT);
-    digitalWrite(WD_OUTPUT, state);
-  }
+  pinMode(WD_OUTPUT, OUTPUT);
+  digitalWrite(WD_OUTPUT, state);
   state = !state;
+}
+
+void setup_can()
+{
+  Serial.println("CAN BUS Shield initialize...");
+  can_reset();
+
+  for (int i = 0; i < 4; i++) {
+    touch_watchdog();
+    if (CAN.begin(CAN_125KBPS) == CAN_OK) {
+      can_ok = true;
+      break;
+    }
+    Serial.print(".");
+    delay(250);
+  }
+
+  if (can_ok) {
+    int err = 0;
+    Serial.println("... inited!");
+    Serial.println("CAN BUS Shield setting filter");
+    if (CAN.init_Mask(0, 1, CAN_MASK) != MCP2515_OK) {
+      Serial.println("init mask 0 failed!");
+      err++;
+    }
+    if (CAN.init_Mask(1, 1, CAN_MASK) != MCP2515_OK) {
+      Serial.println("init mask 1 failed!");
+      err++;
+    }
+    if (CAN.init_Filt(0, 1, SWM_CAN_ID) != MCP2515_OK) {
+      Serial.println("init filter 0 failed!");
+      err++;
+    }
+    if (CAN.init_Filt(1, 1, CCM_CAN_ID) != MCP2515_OK) {
+      Serial.println("init filter 0 failed!");
+      err++;
+    }
+    if (err)
+      can_ok = false;
+  }
+ 
+  if (!can_ok) {
+    Serial.println("... failed!");
+    delay(3000); // hw wd kills us
+  }
 }
 
 void setup()
 {
-  int i;
-
-  update_sw_wd = true;
-  update_hw_wd = true;
-  touch_hw_wd();
+  touch_watchdog();
   Serial.begin(9600);
   Serial.println("start");
 
@@ -219,72 +243,15 @@ void setup()
 
   Serial.println("Kenwood SWC inited");
 
-#ifdef TEST_MODE
-/* Pins 1..4 are for testing w/o CAN shield */
-
-  for (i = 1; i <= 4; i++) {
-    pinMode(i, INPUT);
-    digitalWrite(i, HIGH);
-  }
-#else
-  Serial.println("CAN BUS Shield initialize...");
-
-  for (i = 2; i > 0; i--) {
-    can_reset();
-    for (int j = 4; 4 > 0; j--) {
-      touch_hw_wd();
-      if (CAN.begin(CAN_125KBPS) == CAN_OK) {
-        can_ok = true;
-        goto done;
-      }
-      Serial.print(".");
-      delay(250);
-    }
-  }
-done:
-  if (can_ok) {
-    Serial.println("... inited!");
-    Serial.println("CAN BUS Shield setting filter");
-    if (CAN.init_Mask(0, 1, 0x03ffffff) != MCP2515_OK)
-      Serial.println("init mask 0 failed!");
-    if (CAN.init_Mask(1, 1, 0x03ffffff) != MCP2515_OK)
-      Serial.println("init mask 1 failed!");
-    if (CAN.init_Filt(0, 1, SWM_CAN_ID) != MCP2515_OK)
-      Serial.println("init filter 0 failed!");
-    if (CAN.init_Filt(1, 1, CCM_CAN_ID) != MCP2515_OK)
-      Serial.println("init filter 0 failed!");
-  } else {
-    Serial.println("... failed!");
-    return;
-  }
-#endif
-  touch_sw_wd();
-  touch_hw_wd();
+  setup_can();
+  touch_watchdog();
   Serial.println("All set!");
 }
 
 void loop()
 {
-  if (!wd--)
-    setup();
-  touch_hw_wd();
-#ifdef TEST_MODE
-  check_pins();
-#else
   if (can_ok)
     check_canbus();
-#endif
-}
-
-void check_pins()
-{
-  unsigned char buf[8] = {0x00, 0x0c, 0x28, 0x52, 0x80, 0x00, 0x00, 0x3f};
-
-  buf[7] ^= ((!digitalRead(1)) << 0);
-  buf[7] ^= ((!digitalRead(2)) << 1);
-  buf[7] ^= ((!digitalRead(3)) << 2);
-  buf[7] ^= ((!digitalRead(4)) << 3);
-  do_actions(buf);
 }
 
 void check_canbus()
@@ -297,11 +264,10 @@ void check_canbus()
     CAN.readMsgBuf(&len, buf);
     switch (CAN.getCanId()) {
       case SWM_CAN_ID:
-        touch_sw_wd();
+        touch_watchdog();
         do_actions(buf);
         break;
       case CCM_CAN_ID:
-        touch_sw_wd();
         pinMode(ILLUMI_OUTPUT, OUTPUT);
         digitalWrite(ILLUMI_OUTPUT, ((buf[3] & 0xf0) == 0xf0) ? HIGH : LOW);
         break;
