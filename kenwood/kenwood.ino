@@ -3,7 +3,7 @@
  *
  * (c) 2014 Vitaly Mayatskikh vitaly@gravicappa.info
  *
- * 
+ *
  * Steering wheel module CAN ID is 0x0131726c
  * Message is 8 bytes long: 0x00 0x0c 0x28 0x52 0x80 0x00 0x00 0x3f
  *                                                                ^
@@ -24,7 +24,19 @@
  *                                           ^^
  *                                           |Instrument cluster backlight 0..F
  *                                           Ambient light (F - day, !F - not day)
- *                            
+ *
+ * CEM (?) CAN ID 0x03200408
+ * Gearbox selector position
+ * Message is 8 bytes long: 0x11 0xFE 0x13 0x00 0x24 0x00 0x10 0x00
+ *                                                          ^
+ *                                                          2 bits
+ * 1 - P
+ * 2 - R
+ * 3 - N
+ * 4 - D
+ *
+ * 10 messages per second
+ *
  */
 
 #include <SPI.h>
@@ -33,24 +45,28 @@
 
 #define SWM_CAN_ID 0x0131726c
 #define CCM_CAN_ID 0x02803008
+#define CEM_CAN_ID 0x03200408
 
-#define CAN_MASK (SWM_CAN_ID | CCM_CAN_ID)
+#define CAN_MASK (SWM_CAN_ID | CCM_CAN_ID | CEM_CAN_ID)
 
 /* direct button mappings */
 #define SWM_TRK_PREV    (1ULL << (8 * 7 + 0))
 #define SWM_TRK_NEXT    (1ULL << (8 * 7 + 1))
 #define SWM_VOL_DOWN    (1ULL << (8 * 7 + 2))
 #define SWM_VOL_UP      (1ULL << (8 * 7 + 3))
+
 /* combo mappings for extra functions */
 #define COMBO_DISC_PREV (SWM_TRK_PREV | SWM_VOL_DOWN)
 #define COMBO_DISC_NEXT (SWM_TRK_NEXT | SWM_VOL_UP)
 //#define COMBO_ILLUMI    (SWM_TRK_PREV | SWM_VOL_UP)
 #define COMBO_REBOOT    (SWM_TRK_PREV | SWM_VOL_UP)
 
+#define WD_OUTPUT     8  // MAX823/MAX824 pin 4 (WDI)
 #define SWC_OUTPUT    7  // Steering remote control wire
-#define ILLUMI_OUTPUT 6  // Dimmer control wire (through 5->12v transistor amplifier)
-#define CAN_RESET     5  // MCP2515 pin 17 (-Reset)
-#define WD_OUTPUT     4  // MAX823/MAX824 pin 4 (WDI)
+#define CAN_RESET     6  // MCP2515 pin 17 (-Reset)
+#define ILLUMI_OUTPUT 5  // Dimmer control wire (through 5->12v NPN transistor amplifier)
+#define PARK_OUTPUT   4  // Gearbox is in parking position (through 5->12v NPN transistor amplifier)
+#define CAMERA_OUTPUT 3  // Gearbox is in reverse position (through 5->12v NPN transistor amplifier)
 
 #define NR_ACTIONS 7
 
@@ -121,7 +137,7 @@ void funcall_action_on_press(struct action *a)
 {
   struct funcall_action *f = (struct funcall_action *)a->opaque;
   switch(f->idx) {
-    case 1:
+    case COMBO_REBOOT:
       delay(3000); // hw watchdog kills us
       break;
     default:
@@ -132,14 +148,14 @@ void funcall_action_on_press(struct action *a)
 struct action actions[NR_ACTIONS] =
   {
 //    { COMBO_ILLUMI,    toggle_action_on_press, toggle_action_on_release, "ILLUMI",   { ILLUMI_OUTPUT, false, true } },
-    { COMBO_REBOOT,    funcall_action_on_press,NULL,                     "REBOOT",   { 1 } },
+    { COMBO_REBOOT,    funcall_action_on_press,NULL,                     "REBOOT",   { COMBO_REBOOT } },
     { COMBO_DISC_PREV, swc_action_on_press,    delay_on_release,         "DSC_PREV", { 0,0,1,0,1,0,0,0,0,0,1,0,1,0,0,0,1,0,1,0,1,0,1,0 } },
     { COMBO_DISC_NEXT, swc_action_on_press,    delay_on_release,         "DSC_NEXT", { 1,0,0,1,0,1,0,0,0,0,0,0,1,0,0,0,1,0,1,0,1,0,1,0 } },
     { SWM_TRK_PREV,    swc_action_on_press,    NULL,                     "TRK_PREV", { 0,1,0,0,1,0,0,0,0,0,1,0,0,1,0,0,1,0,1,0,1,0,1,0 } },
     { SWM_TRK_NEXT,    swc_action_on_press,    NULL,                     "TRK_NEXT", { 1,0,1,0,0,1,0,0,0,0,0,0,0,1,0,0,1,0,1,0,1,0,1,0 } },
     { SWM_VOL_DOWN,    swc_action_on_press,    NULL,                     "VOL_DOWN", { 1,0,0,1,0,0,1,0,0,0,0,0,1,0,0,1,0,0,1,0,1,0,1,0 } },
-    { SWM_VOL_UP,      swc_action_on_press,    NULL,                     "VOL_UP",   { 0,0,1,0,0,1,0,0,0,0,1,0,1,0,0,1,0,0,1,0,1,0,1,0 } }
-  };
+    { SWM_VOL_UP,      swc_action_on_press,    NULL,                     "VOL_UP",   { 0,0,1,0,0,1,0,0,0,0,1,0,1,0,0,1,0,0,1,0,1,0,1,0 } },
+};
 
 struct action *last_action = NULL;
 
@@ -217,13 +233,17 @@ void setup_can()
       err++;
     }
     if (CAN.init_Filt(1, 1, CCM_CAN_ID) != MCP2515_OK) {
-      Serial.println("init filter 0 failed!");
+      Serial.println("init filter 1 failed!");
+      err++;
+    }
+    if (CAN.init_Filt(2, 1, CEM_CAN_ID) != MCP2515_OK) {
+      Serial.println("init filter 2 failed!");
       err++;
     }
     if (err)
       can_ok = false;
   }
- 
+
   if (!can_ok) {
     Serial.println("... failed!");
     delay(3000); // hw wd kills us
@@ -240,6 +260,10 @@ void setup()
   digitalWrite(SWC_OUTPUT, HIGH);
   pinMode(ILLUMI_OUTPUT, OUTPUT);
   digitalWrite(ILLUMI_OUTPUT, HIGH);
+  pinMode(PARK_OUTPUT, OUTPUT);
+  digitalWrite(PARK_OUTPUT, HIGH);
+  pinMode(CAMERA_OUTPUT, OUTPUT);
+  digitalWrite(CAMERA_OUTPUT, HIGH);
 
   Serial.println("Kenwood SWC inited");
 
@@ -264,18 +288,24 @@ void check_canbus()
     CAN.readMsgBuf(&len, buf);
     switch (CAN.getCanId()) {
       case SWM_CAN_ID:
-        touch_watchdog();
-        do_actions(buf);
-        break;
+	touch_watchdog();
+	do_actions(buf);
+	break;
       case CCM_CAN_ID:
-        pinMode(ILLUMI_OUTPUT, OUTPUT);
-        digitalWrite(ILLUMI_OUTPUT, ((buf[3] & 0xf0) == 0xf0) ? HIGH : LOW);
-        break;
+	pinMode(ILLUMI_OUTPUT, OUTPUT);
+	digitalWrite(ILLUMI_OUTPUT, ((buf[3] & 0xf0) == 0xf0) ? HIGH : LOW);
+	break;
+      case CEM_CAN_ID:
+	pinMode(PARK_OUTPUT, OUTPUT);
+	digitalWrite(PARK_OUTPUT, ((buf[6] & 0x30) == 0x10) ? LOW : HIGH);
+	pinMode(CAMERA_OUTPUT, OUTPUT);
+	digitalWrite(CAMERA_OUTPUT, ((buf[6] & 0x30) == 0x20) ? LOW : HIGH);
+	break;
       default:
-        break;
-    }  
-  } 
-}   
+	break;
+    }
+  }
+}
 
 void do_actions(unsigned char *buf)
 {
@@ -288,7 +318,7 @@ void do_actions(unsigned char *buf)
   if (i == NR_ACTIONS) {  // no buttons pressed
     if (last_action) {
       if (last_action->on_release)
-        last_action->on_release(last_action);
+	last_action->on_release(last_action);
       last_action = NULL;
     }
   }
@@ -314,4 +344,3 @@ boolean do_action(unsigned char idx, unsigned char *buf)
   }
   return ret;
 }
-
