@@ -272,39 +272,50 @@ void setup()
   Serial.println("All set!");
 }
 
+unsigned long heartbeat = 0;
+
 void loop()
 {
-  if (can_ok)
-    check_canbus();
+  if (can_ok) {
+    heartbeat |= check_canbus();
+
+    /* if we don't receive messages from one of CAN modules watchdog will eventually reset us */
+    if ((heartbeat & CAN_MASK) == CAN_MASK) {
+      touch_watchdog();
+      heartbeat = 0;
+    }
+  }
 }
 
-void check_canbus()
+unsigned long check_canbus()
 {
   unsigned char len;
   unsigned char buf[8];
+  unsigned long can_id, can_mask = 0;
 
-  if(CAN.checkReceive() == CAN_MSGAVAIL) {
-    memset(buf, 0, sizeof(buf));
+  while (CAN.checkReceive() == CAN_MSGAVAIL) {
     CAN.readMsgBuf(&len, buf);
-    switch (CAN.getCanId()) {
+    can_id = CAN.getCanId();
+    can_mask |= can_id;
+    switch (can_id) {
       case SWM_CAN_ID:
-	touch_watchdog();
-	do_actions(buf);
-	break;
+        do_actions(buf);
+        break;
       case CCM_CAN_ID:
-	pinMode(ILLUMI_OUTPUT, OUTPUT);
-	digitalWrite(ILLUMI_OUTPUT, ((buf[3] & 0xf0) == 0xf0) ? HIGH : LOW);
-	break;
+        pinMode(ILLUMI_OUTPUT, OUTPUT);
+        digitalWrite(ILLUMI_OUTPUT, ((buf[3] & 0xf0) == 0xf0) ? HIGH : LOW);
+        break;
       case CEM_CAN_ID:
-	pinMode(PARK_OUTPUT, OUTPUT);
-	digitalWrite(PARK_OUTPUT, ((buf[6] & 0x30) == 0x10) ? LOW : HIGH);
-	pinMode(CAMERA_OUTPUT, OUTPUT);
-	digitalWrite(CAMERA_OUTPUT, ((buf[6] & 0x30) == 0x20) ? LOW : HIGH);
-	break;
+        pinMode(PARK_OUTPUT, OUTPUT);
+        digitalWrite(PARK_OUTPUT, ((buf[6] & 0x30) == 0x10) ? LOW : HIGH);
+        pinMode(CAMERA_OUTPUT, OUTPUT);
+        digitalWrite(CAMERA_OUTPUT, ((buf[6] & 0x30) == 0x20) ? LOW : HIGH);
+        break;
       default:
-	break;
+	      break;
     }
   }
+  return can_mask;
 }
 
 void do_actions(unsigned char *buf)
