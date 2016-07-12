@@ -16,3 +16,6 @@ start, hardware watchdog is highly recommended.
 Arduino's bootloader doesn't make it fast enough before watchdog triggers (~1.6s), so if you want to
 use MAX823 make sure you burn faster bootloader (third-party or original one with reduced retries
 count) or avoid bootloader at all and upload control software through ISP programmer.
+
+If you think that empty space on 2DIN fascia is ugly and should be used for something better than
+boost gauge or smartphone holder, look at my other project: https://github.com/vtl/volvo-ddd
